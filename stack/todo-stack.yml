@@ -1,0 +1,161 @@
+version: "3.9"
+
+# Docker Stack 배포 설정
+# 실행: docker stack deploy -c stack/todo-stack.yml todo
+
+networks:
+  todo-overlay:
+    external: true        # init-swarm.sh 에서 미리 생성
+  mysql-net:
+    external: true        # DB 전용 internal overlay
+
+volumes:
+  mysql-master-data:
+  mysql-slave-data:
+
+services:
+
+  # ── MySQL Master (쓰기 전용) ─────────────────────────────────
+  mysql-master:
+    image: registry:5000/mysql-master:latest
+    networks:
+      - mysql-net
+    volumes:
+      - mysql-master-data:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root_pass_123
+      MYSQL_DATABASE: tododb
+      MYSQL_USER: todo
+      MYSQL_PASSWORD: todo_pass_123
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+      resources:
+        limits:
+          memory: 512M
+
+  # ── MySQL Slave (읽기 전용) ──────────────────────────────────
+  mysql-slave:
+    image: registry:5000/mysql-slave:latest
+    networks:
+      - mysql-net
+    volumes:
+      - mysql-slave-data:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root_pass_123
+      MYSQL_DATABASE: tododb
+      MYSQL_USER: todo
+      MYSQL_PASSWORD: todo_pass_123
+      MYSQL_MASTER_HOST: mysql-master
+      REPLICATION_PASSWORD: repl_pass_123
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role != manager      # worker 노드에 배치
+      restart_policy:
+        condition: on-failure
+        delay: 30s                    # master 먼저 뜰 시간 확보
+        max_attempts: 5
+      resources:
+        limits:
+          memory: 512M
+
+  # ── Go REST API ──────────────────────────────────────────────
+  todoapi:
+    image: registry:5000/todoapi:latest
+    networks:
+      - todo-overlay
+      - mysql-net
+    environment:
+      MYSQL_MASTER_HOST: mysql-master
+      MYSQL_SLAVE_HOST: mysql-slave
+      MYSQL_DATABASE: tododb
+      MYSQL_USER: todo
+      MYSQL_PASSWORD: todo_pass_123
+      PORT: "8080"
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 10
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        delay: 5s
+      resources:
+        limits:
+          memory: 128M
+
+  # ── Nuxt.js Frontend ────────────────────────────────────────
+  frontend:
+    image: registry:5000/frontend:latest
+    networks:
+      - todo-overlay
+    environment:
+      NUXT_PUBLIC_API_BASE: /api
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+      resources:
+        limits:
+          memory: 256M
+
+  # ── Nginx Reverse Proxy ──────────────────────────────────────
+  nginx:
+    image: registry:5000/nginx:latest
+    networks:
+      - todo-overlay
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+      update_config:
+        parallelism: 1
+        delay: 10s
+      resources:
+        limits:
+          memory: 64M
+
+  # ── HAProxy Ingress ──────────────────────────────────────────
+  haproxy:
+    image: registry:5000/haproxy:latest
+    networks:
+      - todo-overlay
+    ports:
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: ingress       # Swarm routing mesh
+      - target: 8404
+        published: 8404
+        protocol: tcp
+        mode: ingress
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+      resources:
+        limits:
+          memory: 64M

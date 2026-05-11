@@ -1,0 +1,129 @@
+version: "3.9"
+
+# DinD(Docker-in-Docker) 기반 Docker Swarm 클러스터
+# manager 1대 + worker 3대 + registry 1대
+
+services:
+  # ── Private Registry ──────────────────────────────────────────
+  registry:
+    image: registry:2
+    container_name: registry
+    ports:
+      - "5000:5000"
+    networks:
+      - dind-net
+    restart: unless-stopped
+
+  # ── Swarm Manager ─────────────────────────────────────────────
+  manager:
+    image: docker:27.3-dind
+    container_name: manager
+    hostname: manager
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    command: >
+      dockerd
+        --host=tcp://0.0.0.0:2375
+        --host=unix:///var/run/docker.sock
+        --insecure-registry=registry:5000
+    volumes:
+      - manager-data:/var/lib/docker
+      - ./scripts:/scripts:ro
+      - ./stack:/stack:ro
+    networks:
+      - dind-net
+    ports:
+      - "80:80"       # HAProxy ingress → 앱 접속
+      - "8404:8404"   # HAProxy stats
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ── Swarm Workers ─────────────────────────────────────────────
+  worker1:
+    image: docker:27.3-dind
+    container_name: worker1
+    hostname: worker1
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    command: >
+      dockerd
+        --host=tcp://0.0.0.0:2375
+        --host=unix:///var/run/docker.sock
+        --insecure-registry=registry:5000
+    volumes:
+      - worker1-data:/var/lib/docker
+    networks:
+      - dind-net
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  worker2:
+    image: docker:27.3-dind
+    container_name: worker2
+    hostname: worker2
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    command: >
+      dockerd
+        --host=tcp://0.0.0.0:2375
+        --host=unix:///var/run/docker.sock
+        --insecure-registry=registry:5000
+    volumes:
+      - worker2-data:/var/lib/docker
+    networks:
+      - dind-net
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  worker3:
+    image: docker:27.3-dind
+    container_name: worker3
+    hostname: worker3
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    command: >
+      dockerd
+        --host=tcp://0.0.0.0:2375
+        --host=unix:///var/run/docker.sock
+        --insecure-registry=registry:5000
+    volumes:
+      - worker3-data:/var/lib/docker
+    networks:
+      - dind-net
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+# ── Networks ───────────────────────────────────────────────────
+networks:
+  dind-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+# ── Volumes ────────────────────────────────────────────────────
+volumes:
+  manager-data:
+  worker1-data:
+  worker2-data:
+  worker3-data:
